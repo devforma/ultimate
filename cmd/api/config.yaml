@@ -1,0 +1,5 @@
+containerid: "9f4a124daa78"
+address: "127.0.0.1:3306"
+user: "root"
+password: "123456kkk"
+database: "test"
