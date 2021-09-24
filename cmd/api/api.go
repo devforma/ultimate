@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,19 +10,35 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/devforma/ultimate/cmd/api/handlers"
 	"github.com/devforma/ultimate/internal/config"
 	"github.com/devforma/ultimate/internal/database"
 	"github.com/devforma/ultimate/internal/web"
+	"github.com/streadway/amqp"
 )
 
 func main() {
+	//init mysql db
 	db, err := InitDB("config.yaml")
 	if err != nil {
 		log.Fatalf("init db failed: %v", err)
 	}
 	defer db.Close()
 
-	httpServer := InitAPIServer(db)
+	//init rabbitmq connection
+	mqConn, err := InitMQConn("amqp://guest:guest@127.0.0.1:5672/")
+	if err != nil {
+		log.Fatalf("init mq connection failed: %v", err)
+	}
+	defer mqConn.Close()
+
+	//init logger
+	logger, err := InitLogger("api.log")
+	if err != nil {
+		log.Fatalf("init logger failed: %v", err)
+	}
+
+	httpServer := InitAPIServer(db, mqConn, logger)
 
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil {
@@ -51,6 +66,26 @@ func main() {
 	}
 }
 
+// InitLogger get logger
+func InitLogger(logPath string) (*log.Logger, error) {
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	return log.New(logFile, "[api]", log.LstdFlags), nil
+}
+
+// InitMQConn get mq connection
+func InitMQConn(mqUrl string) (*amqp.Connection, error) {
+	conn, err := amqp.Dial(mqUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
+}
+
 // InitDB get database connection
 func InitDB(cfgPath string) (*database.DB, error) {
 	var cfg database.Config
@@ -66,34 +101,17 @@ func InitDB(cfgPath string) (*database.DB, error) {
 	return db, nil
 }
 
-type Canal struct {
-	ID       int    `db:"id" json:"id"`
-	Title    string `db:"title" json:"title"`
-	Duration int    `db:"duration" json:"duration"`
-}
-
 // InitAPIServer init http.Server
-func InitAPIServer(db *database.DB) http.Server {
+func InitAPIServer(db *database.DB, mqConn *amqp.Connection, logger *log.Logger) http.Server {
 	handler := web.NewHandler("404 not found HaHa")
 
-	handler.AddRoute("GET", "/canal", func(w http.ResponseWriter, r *http.Request) {
-		var canal Canal
-		db.Get(&canal, "SELECT * FROM `canal` WHERE `id`=?", r.URL.Query().Get("id"))
+	canalAPI := handlers.CanalAPI{DB: db}
 
-		time.Sleep(8 * time.Second)
+	handler.AddRoute("GET", "/canal", canalAPI.SingleCanal)
+	handler.AddRoute("GET", "/canals", canalAPI.ListCanal)
 
-		if data, err := json.Marshal(canal); err == nil {
-			w.Write(data)
-		}
-	})
-
-	handler.AddRoute("GET", "/canals", func(w http.ResponseWriter, r *http.Request) {
-		var canals []Canal
-		db.Select(&canals, "SELECT * FROM `canal`")
-		if data, err := json.Marshal(canals); err == nil {
-			w.Write(data)
-		}
-	})
+	mqAPI := handlers.MQAPI{Logger: logger, Conn: mqConn}
+	handler.AddRoute("GET", "/mq/workqueue", mqAPI.WorkQueue)
 
 	return http.Server{
 		Addr:         ":80",
