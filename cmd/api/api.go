@@ -109,6 +109,7 @@ func InitAPIServer(db *database.DB, mqConn *amqp.Connection, logger *log.Logger)
 
 	handler.AddRoute("GET", "/canal", canalAPI.SingleCanal)
 	handler.AddRoute("GET", "/canals", canalAPI.ListCanal)
+	handler.AddRoute("POST", "/canal", canalAPI.NewCanal)
 
 	mqAPI := handlers.MQAPI{Logger: logger, Conn: mqConn}
 	handler.AddRoute("GET", "/mq/workqueue", mqAPI.WorkQueue)
